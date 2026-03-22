@@ -1,0 +1,15 @@
+# Data (symlinked, not tracked)
+data/
+
+# Training outputs
+output/
+wandb/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Misc
+*.log
+pyrefly.toml
