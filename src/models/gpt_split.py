@@ -7,8 +7,12 @@ import math
 import inspect
 
 """
-Implements a base model to compare future tests against
+GPT variant with split QKV and optionally split gate/up projections.
+Designed to test whether fused projections hurt Muon's orthogonalization.
 """
+
+# Global flag set from config before model construction
+SPLIT_MLP = False
 
 
 class Attention(nn.Module):
@@ -19,21 +23,21 @@ class Attention(nn.Module):
         ), f"Embedding dim ({n_embd}) must be divisible by number of heads ({n_heads})."
         self.n_embd = n_embd
         self.n_heads = n_heads
-        self.H = n_embd // n_heads  # head size
-        self.attn = nn.Linear(n_embd, 3 * n_embd, bias=False)
+        self.H = n_embd // n_heads
+
+        self.q_proj = nn.Linear(n_embd, n_embd, bias=False)
+        self.k_proj = nn.Linear(n_embd, n_embd, bias=False)
+        self.v_proj = nn.Linear(n_embd, n_embd, bias=False)
         self.proj = nn.Linear(n_embd, n_embd, bias=False)
         self.q_norm = nn.RMSNorm(self.H)
         self.k_norm = nn.RMSNorm(self.H)
         self.proj.RESIDUAL_SCALE_INIT_FACTOR = True  # pyrefly: ignore
-        # self.register_buffer("tril", torch.tril(torch.ones(block_size,block_size)).view(1,1,block_size,block_size))
 
     def forward(self, x, sin, cos):
         B, T, C = x.shape
-        q, k, v = self.attn(x).split(self.n_embd, dim=-1)  # q,k,v each is (B,T,C)
-        q = q.view(B, T, self.n_heads, self.H).transpose(1, 2)  # (B,n_heads,T,H)
-        k = k.view(B, T, self.n_heads, self.H).transpose(1, 2)
-        v = v.view(B, T, self.n_heads, self.H).transpose(1, 2)
-        # Apply RoPE
+        q = self.q_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
+        k = self.k_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
         q = apply_rotary_emb(q, sin, cos)
         k = apply_rotary_emb(k, sin, cos)
         q, k = self.q_norm(q), self.k_norm(k)
@@ -42,15 +46,14 @@ class Attention(nn.Module):
         return self.proj(out)
 
 
-# SwiGLU mlp
-class MLP(nn.Module):
+class MLPFused(nn.Module):
+    """Original fused gate/up SwiGLU MLP (used when split_mlp=False)."""
+
     def __init__(self, n_embd):
         super().__init__()
         self.n_embd = n_embd
         hidden_dim = int(8 * n_embd // 3)
-        self.hidden_dim = (
-            (hidden_dim + 255) // 256 * 256
-        )  # ensures it's divisible by 256 for speed
+        self.hidden_dim = (hidden_dim + 255) // 256 * 256
         self.gate_proj = nn.Linear(n_embd, self.hidden_dim * 2, bias=False)
         self.down_proj = nn.Linear(self.hidden_dim, n_embd, bias=False)
         self.down_proj.RESIDUAL_SCALE_INIT_FACTOR = True  # pyrefly: ignore
@@ -62,14 +65,32 @@ class MLP(nn.Module):
         return self.down_proj(y)
 
 
-# Block
+class MLPSplit(nn.Module):
+    """Split gate/up SwiGLU MLP -- each projection is a square-ish matrix for Muon."""
+
+    def __init__(self, n_embd):
+        super().__init__()
+        self.n_embd = n_embd
+        hidden_dim = int(8 * n_embd // 3)
+        self.hidden_dim = (hidden_dim + 255) // 256 * 256
+        self.gate_proj = nn.Linear(n_embd, self.hidden_dim, bias=False)
+        self.up_proj = nn.Linear(n_embd, self.hidden_dim, bias=False)
+        self.down_proj = nn.Linear(self.hidden_dim, n_embd, bias=False)
+        self.down_proj.RESIDUAL_SCALE_INIT_FACTOR = True  # pyrefly: ignore
+
+    def forward(self, x):
+        gate = F.silu(self.gate_proj(x))
+        y = gate * self.up_proj(x)
+        return self.down_proj(y)
+
+
 class Block(nn.Module):
-    def __init__(self, n_embd, n_heads):
+    def __init__(self, n_embd, n_heads, split_mlp=False):
         super().__init__()
         self.ln1 = nn.RMSNorm(n_embd)
         self.sa = Attention(n_embd, n_heads)
         self.ln2 = nn.RMSNorm(n_embd)
-        self.mlp = MLP(n_embd)
+        self.mlp = MLPSplit(n_embd) if split_mlp else MLPFused(n_embd)
 
     def forward(self, x, sin, cos):
         x = x + self.sa(self.ln1(x), sin, cos)
@@ -77,7 +98,6 @@ class Block(nn.Module):
         return x
 
 
-# LLM
 class GPT(nn.Module):
     def __init__(
         self,
@@ -97,7 +117,6 @@ class GPT(nn.Module):
         self.n_layers = n_layers
         self.wte = nn.Embedding(vocab_size, n_embd)
 
-        # Precompute RoPE with the actual head dimension (n_embd // n_heads)
         sin, cos = self._precompute_rotary_embeddings(
             block_size, (n_embd // n_heads)
         )  # pyrefly: ignore
@@ -105,24 +124,17 @@ class GPT(nn.Module):
         self.register_buffer("cos", cos)
         self.transformer = nn.ModuleList(
             [
-                Block(
-                    n_embd,
-                    n_heads,
-                )
+                Block(n_embd, n_heads, split_mlp=SPLIT_MLP)
                 for _ in range(n_layers)
             ]
         )
         self.ln = nn.RMSNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
-        self.wte.weight = (
-            self.lm_head.weight
-        )  # Embedding layer and final calssifier are the same
+        self.wte.weight = self.lm_head.weight
         self.apply(self._init_weights)
 
-    # initialize weights
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
-            # std = 1 / math.sqrt(self.n_embd) is what GPT-3 says but DeepSeek says to go lower
             std = 0.01
             if hasattr(module, "RESIDUAL_SCALE_INIT_FACTOR"):
                 std *= 1 / (math.sqrt(2 * self.n_layers))
@@ -133,12 +145,11 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.01)
 
     def forward(self, idx, targets=None):
-        # select the index and put them together
         B, T = idx.shape
         assert (
             T <= self.block_size
         ), f"Sequence length ({T}) is longer than the block_size ({self.block_size})."
-        x = self.wte(idx)  # (B,T,C)
+        x = self.wte(idx)
         sin = self.sin[:, :, :T, :]  # pyrefly: ignore
         cos = self.cos[:, :, :T, :]  # pyrefly: ignore
 
@@ -149,7 +160,6 @@ class GPT(nn.Module):
         if targets is not None:
             logits = self.lm_head(x)
             B, T, C = logits.shape
-            # cross_entropy expects shape (N,C)
             loss = F.cross_entropy(logits.view(B * T, C), targets.view(B * T))
             return None, loss
         else:
@@ -254,12 +264,9 @@ class GPT(nn.Module):
     def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None):
         if device is None:
             device = self.wte.weight.device
-        # stride the channels
         channel_range = torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
         inv_freq = 1.0 / (base ** (channel_range / head_dim))
-        # stride the time steps
         t = torch.arange(seq_len, dtype=torch.float32, device=device)
-        # calculate the rotation frequency at each (time, channel) pair
         freqs = torch.outer(t, inv_freq)
         freqs = torch.cat((freqs, freqs), dim=-1)
         sin, cos = freqs.sin(), freqs.cos()

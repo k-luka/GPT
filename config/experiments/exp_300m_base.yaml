@@ -4,24 +4,19 @@ hydra:
 
 experiment:
   project: "GPT_Small"
-  run_name: "M_muon"
+  run_name: "exp_base_300m"
 
 model:
+  model_type: "gpt"
   vocab_size: 50304
   block_size: 2048
-  n_embd: 2048
-  n_layers: 24
-  n_heads: 16
+  n_embd: 1024
+  n_layers: 18
+  n_heads: 8
   head_size: 128
   rope_head_size: 64
   kv_latent_size: 512
   q_latent_size: 4096
-  
-  # # MoE Settings
-  # n_shared_experts: 2
-  # n_routed_experts: 40
-  # topk_experts: 8
-  # expert_hidden_size: 1024
 
 data:
   train_data_root: "data/edu_fineweb350B/"
@@ -33,21 +28,19 @@ training:
 
   # Logistics
   logging_steps: 10
-  checkpoint_interval: 8000
-  generation_interval: 1000
-  eval_interval: 500
-  eval_steps: 80
+  checkpoint_interval: 4000
+  generation_interval: 2000
+  eval_interval: 250
+  eval_steps: 40
   eval_batch_size: 16
   eval_block_size: 2048
-  
+
   # Optimization
-  max_steps: 40000
-  warmup_steps: 800
+  max_steps: 12000
+  warmup_steps: 400
   max_lr: 2.0e-4
   min_lr: 2.0e-5
-  use_muon: true
+  use_muon: false
   muon_lr_scale: 30.0
   muon_wd: 0.1
   weight_decay: 0.1
-  
-# resume_checkpoint: output/checkpoints/LM_2/best_val

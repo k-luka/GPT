@@ -18,7 +18,9 @@ class TrainerConfig:
     min_lr: float = 1e-4
     max_lr: float = 6e-4
     learning_rate: float = 1e-4
+    use_muon: bool = True
     muon_lr_scale: float = 30.0
+    muon_wd: float = 0.1
     weight_decay: float = 0.1
     logging_steps: int = 1
     checkpoint_interval: int = 1000
@@ -53,7 +55,8 @@ class TrainerSingleGPU:
         )
 
         self.optimizer = self.model.configure_optimizers(
-            self.config.weight_decay, self.config.learning_rate, self.config.device
+            self.config.weight_decay, self.config.learning_rate, self.config.device,
+            use_muon=self.config.use_muon, muon_wd=self.config.muon_wd,
         )
         self.tokenizer = tokenizer
         self.step = 0

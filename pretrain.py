@@ -7,7 +7,6 @@ import wandb
 import random
 import numpy as np
 
-from src.models.gpt import GPT
 from src.training.trainer_single_gpu import TrainerSingleGPU, TrainerConfig
 from src.utils.helpers import print_trainable_parameters, estimate_flops
 
@@ -36,7 +35,7 @@ def main(cfg: DictConfig):
     # init wandb
     wandb_run = wandb.init(
         project=cfg.experiment.project,
-        name=cfg.experiment.run_name + "_baseline",
+        name=cfg.experiment.run_name,
         config=cast(dict[str, Any], OmegaConf.to_container(cfg, resolve=True)),
         dir=os.getcwd(),
     )
@@ -52,7 +51,14 @@ def main(cfg: DictConfig):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    # Define simple baseline model
+    model_type = cfg.model.get("model_type", "gpt")
+    if model_type == "gpt_split":
+        import src.models.gpt_split as gpt_split_module
+        gpt_split_module.SPLIT_MLP = cfg.model.get("split_mlp", False)
+        GPT = gpt_split_module.GPT
+    else:
+        from src.models.gpt import GPT
+
     model = GPT(
         n_embd=cfg.model.n_embd,
         vocab_size=cfg.model.vocab_size,
@@ -72,9 +78,8 @@ def main(cfg: DictConfig):
     print_trainable_parameters(cfg, model)
     estimate_flops(cfg)
 
-    # config single GPU trainer
     trainer_config = TrainerConfig(
-        run_name=cfg.experiment.run_name + "_baseline",
+        run_name=cfg.experiment.run_name,
         batch_size=cfg.training.batch_size,
         block_size=cfg.model.block_size,
         grad_accum_steps=cfg.training.grad_accum_steps,
@@ -82,7 +87,9 @@ def main(cfg: DictConfig):
         warmup_steps=cfg.training.warmup_steps,
         min_lr=cfg.training.min_lr,
         max_lr=cfg.training.max_lr,
+        use_muon=cfg.training.get("use_muon", True),
         muon_lr_scale=cfg.training.get("muon_lr_scale", 30.0),
+        muon_wd=cfg.training.get("muon_wd", cfg.training.weight_decay),
         weight_decay=cfg.training.weight_decay,
         logging_steps=cfg.training.logging_steps,
         checkpoint_interval=cfg.training.checkpoint_interval,
