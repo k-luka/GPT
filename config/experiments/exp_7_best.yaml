@@ -3,7 +3,7 @@ hydra:
     dir: output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
 experiment:
-  project: "GPT_Small"
+  project: "GPT_Nano"
   run_name: "exp7_best_combo"
 
 model:
@@ -24,8 +24,8 @@ data:
   val_data_root: "data/edu_fineweb350B/"
 
 training:
-  batch_size: 32
-  grad_accum_steps: 4
+  batch_size: 64
+  grad_accum_steps: 2
   logging_steps: 10
   checkpoint_interval: 4000
   generation_interval: 2000
@@ -34,8 +34,8 @@ training:
   eval_batch_size: 16
   eval_block_size: 2048
 
-  max_steps: 12000
-  warmup_steps: 400
+  max_steps: 21600
+  warmup_steps: 700
   max_lr: 2.0e-4
   min_lr: 2.0e-5
   use_muon: true

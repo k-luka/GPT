@@ -35,6 +35,7 @@ for exp in "${EXPERIMENTS[@]}"; do
     echo "Starting experiment: ${exp}"
     echo "Time: $(date)"
     echo "============================================"
+    curl -s "https://api.day.app/R6cKMT5xvoxAxjKkzWruZP/${exp}-started" > /dev/null
 
     python pretrain.py \
         --config-path=config/experiments \
@@ -44,6 +45,7 @@ for exp in "${EXPERIMENTS[@]}"; do
     echo "Finished experiment: ${exp}"
     echo "Time: $(date)"
     echo "============================================"
+    curl -s "https://api.day.app/R6cKMT5xvoxAxjKkzWruZP/${exp}-completed" > /dev/null
     echo ""
 done
 
