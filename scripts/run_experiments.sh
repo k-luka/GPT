@@ -20,14 +20,9 @@ module load cuda/12.8.1
 conda activate LLM
 
 EXPERIMENTS=(
-    "exp_0_adamw"
-    "exp_1_muon_current"
-    "exp_2_muon_no_wd"
-    "exp_3_muon_lr100"
-    "exp_4_muon_lr150"
-    "exp_5_split_qkv"
-    "exp_6_split_all"
-    "exp_7_best"
+    "exp_split_both"
+    "exp_split_qkv"
+    "exp_split_mlp"
 )
 
 for exp in "${EXPERIMENTS[@]}"; do

@@ -19,6 +19,7 @@ class TrainerConfig:
     max_lr: float = 6e-4
     learning_rate: float = 1e-4
     use_muon: bool = True
+    muon_backend: str = "custom"
     muon_lr_scale: float = 30.0
     muon_wd: float = 0.1
     weight_decay: float = 0.1
@@ -57,6 +58,7 @@ class TrainerSingleGPU:
         self.optimizer = self.model.configure_optimizers(
             self.config.weight_decay, self.config.learning_rate, self.config.device,
             use_muon=self.config.use_muon, muon_wd=self.config.muon_wd,
+            muon_backend=self.config.muon_backend,
         )
         self.tokenizer = tokenizer
         self.step = 0

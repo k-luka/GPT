@@ -7,16 +7,17 @@ import math
 import inspect
 
 """
-GPT variant with split QKV and optionally split gate/up projections.
+GPT variant with independently toggleable split QKV and split gate/up projections.
 Designed to test whether fused projections hurt Muon's orthogonalization.
 """
 
-# Global flag set from config before model construction
+# Global flags set from config before model construction
 SPLIT_MLP = False
+SPLIT_QKV = False
 
 
 class Attention(nn.Module):
-    def __init__(self, n_embd, n_heads):
+    def __init__(self, n_embd, n_heads, split_qkv=False):
         super().__init__()
         assert (
             n_embd % n_heads == 0
@@ -24,10 +25,14 @@ class Attention(nn.Module):
         self.n_embd = n_embd
         self.n_heads = n_heads
         self.H = n_embd // n_heads
+        self.split_qkv = split_qkv
 
-        self.q_proj = nn.Linear(n_embd, n_embd, bias=False)
-        self.k_proj = nn.Linear(n_embd, n_embd, bias=False)
-        self.v_proj = nn.Linear(n_embd, n_embd, bias=False)
+        if split_qkv:
+            self.q_proj = nn.Linear(n_embd, n_embd, bias=False)
+            self.k_proj = nn.Linear(n_embd, n_embd, bias=False)
+            self.v_proj = nn.Linear(n_embd, n_embd, bias=False)
+        else:
+            self.attn = nn.Linear(n_embd, 3 * n_embd, bias=False)
         self.proj = nn.Linear(n_embd, n_embd, bias=False)
         self.q_norm = nn.RMSNorm(self.H)
         self.k_norm = nn.RMSNorm(self.H)
@@ -35,9 +40,15 @@ class Attention(nn.Module):
 
     def forward(self, x, sin, cos):
         B, T, C = x.shape
-        q = self.q_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
-        k = self.k_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
-        v = self.v_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
+        if self.split_qkv:
+            q = self.q_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
+            k = self.k_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
+            v = self.v_proj(x).view(B, T, self.n_heads, self.H).transpose(1, 2)
+        else:
+            q, k, v = self.attn(x).split(self.n_embd, dim=-1)
+            q = q.view(B, T, self.n_heads, self.H).transpose(1, 2)
+            k = k.view(B, T, self.n_heads, self.H).transpose(1, 2)
+            v = v.view(B, T, self.n_heads, self.H).transpose(1, 2)
         q = apply_rotary_emb(q, sin, cos)
         k = apply_rotary_emb(k, sin, cos)
         q, k = self.q_norm(q), self.k_norm(k)
@@ -85,10 +96,10 @@ class MLPSplit(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, n_embd, n_heads, split_mlp=False):
+    def __init__(self, n_embd, n_heads, split_qkv=False, split_mlp=False):
         super().__init__()
         self.ln1 = nn.RMSNorm(n_embd)
-        self.sa = Attention(n_embd, n_heads)
+        self.sa = Attention(n_embd, n_heads, split_qkv=split_qkv)
         self.ln2 = nn.RMSNorm(n_embd)
         self.mlp = MLPSplit(n_embd) if split_mlp else MLPFused(n_embd)
 
@@ -124,7 +135,7 @@ class GPT(nn.Module):
         self.register_buffer("cos", cos)
         self.transformer = nn.ModuleList(
             [
-                Block(n_embd, n_heads, split_mlp=SPLIT_MLP)
+                Block(n_embd, n_heads, split_qkv=SPLIT_QKV, split_mlp=SPLIT_MLP)
                 for _ in range(n_layers)
             ]
         )
@@ -193,7 +204,7 @@ class GPT(nn.Module):
         return idx
 
     def configure_optimizers(self, weight_decay, learning_rate, device,
-                             use_muon=True, muon_wd=None):
+                             use_muon=True, muon_wd=None, muon_backend="custom"):
         if muon_wd is None:
             muon_wd = weight_decay
 
@@ -219,7 +230,37 @@ class GPT(nn.Module):
         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and "cuda" in str(device)
 
-        if use_muon:
+        if use_muon and muon_backend == "pytorch_rms":
+            print(f"Using PyTorch Muon with match_rms_adamw")
+            print(f"Muon params (2D hidden): {len(muon_params)} tensors")
+            print(f"AdamW decay params (Embed/Head): {len(adamw_decay_params)} tensors")
+            print(f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors")
+            print(f"Weight decay (shared): {weight_decay}")
+            print(f"Using fused AdamW: {use_fused}")
+
+            adam_opt = torch.optim.AdamW(
+                [
+                    {"params": adamw_decay_params, "weight_decay": weight_decay},
+                    {"params": adamw_nodecay_params, "weight_decay": 0.0}
+                ],
+                lr=learning_rate,
+                betas=(0.9, 0.95),
+                eps=1e-8,
+                fused=use_fused,
+            )
+
+            muon_opt = torch.optim.Muon(
+                muon_params,
+                lr=learning_rate,
+                momentum=0.95,
+                nesterov=True,
+                ns_steps=6,
+                weight_decay=weight_decay,
+                adjust_lr_fn="match_rms_adamw",
+            )
+
+            return DualOptimizer(adam_opt, muon_opt)
+        elif use_muon:
             print(f"Muon params (2D hidden): {len(muon_params)} tensors")
             print(f"AdamW decay params (Embed/Head): {len(adamw_decay_params)} tensors")
             print(f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors")

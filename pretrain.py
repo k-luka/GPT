@@ -54,6 +54,7 @@ def main(cfg: DictConfig):
     model_type = cfg.model.get("model_type", "gpt")
     if model_type == "gpt_split":
         import src.models.gpt_split as gpt_split_module
+        gpt_split_module.SPLIT_QKV = cfg.model.get("split_qkv", False)
         gpt_split_module.SPLIT_MLP = cfg.model.get("split_mlp", False)
         GPT = gpt_split_module.GPT
     else:
@@ -88,6 +89,7 @@ def main(cfg: DictConfig):
         min_lr=cfg.training.min_lr,
         max_lr=cfg.training.max_lr,
         use_muon=cfg.training.get("use_muon", True),
+        muon_backend=cfg.training.get("muon_backend", "custom"),
         muon_lr_scale=cfg.training.get("muon_lr_scale", 30.0),
         muon_wd=cfg.training.get("muon_wd", cfg.training.weight_decay),
         weight_decay=cfg.training.weight_decay,

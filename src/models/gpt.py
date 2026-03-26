@@ -183,7 +183,7 @@ class GPT(nn.Module):
         return idx
 
     def configure_optimizers(self, weight_decay, learning_rate, device,
-                             use_muon=True, muon_wd=None):
+                             use_muon=True, muon_wd=None, muon_backend="custom"):
         if muon_wd is None:
             muon_wd = weight_decay
 
@@ -209,7 +209,37 @@ class GPT(nn.Module):
         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and "cuda" in str(device)
 
-        if use_muon:
+        if use_muon and muon_backend == "pytorch_rms":
+            print(f"Using PyTorch Muon with match_rms_adamw")
+            print(f"Muon params (2D hidden): {len(muon_params)} tensors")
+            print(f"AdamW decay params (Embed/Head): {len(adamw_decay_params)} tensors")
+            print(f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors")
+            print(f"Weight decay (shared): {weight_decay}")
+            print(f"Using fused AdamW: {use_fused}")
+
+            adam_opt = torch.optim.AdamW(
+                [
+                    {"params": adamw_decay_params, "weight_decay": weight_decay},
+                    {"params": adamw_nodecay_params, "weight_decay": 0.0}
+                ],
+                lr=learning_rate,
+                betas=(0.9, 0.95),
+                eps=1e-8,
+                fused=use_fused,
+            )
+
+            muon_opt = torch.optim.Muon(
+                muon_params,
+                lr=learning_rate,
+                momentum=0.95,
+                nesterov=True,
+                ns_steps=6,
+                weight_decay=weight_decay,
+                adjust_lr_fn="match_rms_adamw",
+            )
+
+            return DualOptimizer(adam_opt, muon_opt)
+        elif use_muon:
             print(f"Muon params (2D hidden): {len(muon_params)} tensors")
             print(f"AdamW decay params (Embed/Head): {len(adamw_decay_params)} tensors")
             print(f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors")
