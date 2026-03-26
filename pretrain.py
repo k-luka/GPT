@@ -57,8 +57,19 @@ def main(cfg: DictConfig):
         gpt_split_module.SPLIT_QKV = cfg.model.get("split_qkv", False)
         gpt_split_module.SPLIT_MLP = cfg.model.get("split_mlp", False)
         GPT = gpt_split_module.GPT
+    elif model_type == "gpt_moe":
+        from src.models.gpt_moe import GPT
     else:
         from src.models.gpt import GPT
+
+    moe_kwargs = {}
+    if model_type == "gpt_moe":
+        moe_kwargs = {
+            "n_shared_experts": cfg.model.get("n_shared_experts", 2),
+            "n_routed_experts": cfg.model.get("n_routed_experts", 64),
+            "topk_experts": cfg.model.get("topk_experts", 6),
+            "expert_hidden_size": cfg.model.get("expert_hidden_size", 256),
+        }
 
     model = GPT(
         n_embd=cfg.model.n_embd,
@@ -70,6 +81,7 @@ def main(cfg: DictConfig):
         kv_latent_size=cfg.model.kv_latent_size,
         q_latent_size=cfg.model.q_latent_size,
         n_layers=cfg.model.n_layers,
+        **moe_kwargs,
     )
 
     # Move to GPU and optionally compile
