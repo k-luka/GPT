@@ -1,0 +1,54 @@
+hydra:
+  run:
+    dir: output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+experiment:
+  project: "GPT_Nano"
+  run_name: "exp8_finegrained_moe"
+
+model:
+  model_type: "gpt_moe"
+  # Same size as exp_7 for fair comparison
+  vocab_size: 50304
+  block_size: 2048
+  n_embd: 1024
+  n_layers: 18
+  n_heads: 8
+  head_size: 128
+  rope_head_size: 64
+  kv_latent_size: 512
+  q_latent_size: 4096
+
+  # Fine-grained MoE settings
+  # Active compute per token: (n_shared_experts + topk_experts) * expert_hidden_size
+  #   = (2 + 6) * 256 = 2048 hidden units
+  # Standard MLP would use: int(8 * 1024 // 3) rounded to 256 = 2816
+  # ~72% of standard MLP compute — tuned for fine-grained expert dynamics
+  n_shared_experts: 2
+  n_routed_experts: 64
+  topk_experts: 6
+  expert_hidden_size: 256
+
+data:
+  train_data_root: "data/edu_fineweb350B/"
+  val_data_root: "data/edu_fineweb350B/"
+
+training:
+  batch_size: 64
+  grad_accum_steps: 2
+  logging_steps: 10
+  checkpoint_interval: 4000
+  generation_interval: 2000
+  eval_interval: 250
+  eval_steps: 40
+  eval_batch_size: 16
+  eval_block_size: 2048
+
+  max_steps: 21600
+  warmup_steps: 700
+  max_lr: 2.0e-4
+  min_lr: 2.0e-5
+  use_muon: true
+  muon_lr_scale: 100.0
+  muon_wd: 0.0
+  weight_decay: 0.1

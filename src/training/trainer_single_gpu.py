@@ -5,6 +5,7 @@ from src.eval.metrics import estimate_loss, evaluate_hella_swag
 import time
 import math
 import os
+import json
 
 
 @dataclass
@@ -147,6 +148,7 @@ class TrainerSingleGPU:
                 print(
                     f"Step: {step} | loss: {loss:.6f} | dt: {dt * 1000:.4f} ms | tokens/sec: {tps:.4f} | adam lr: {adam_lr:.6e} | muon lr: {muon_lr:.6e}"
                 )
+                self._log_expert_loads(step)
 
             if (
                 self.tokenizer is not None
@@ -208,6 +210,21 @@ class TrainerSingleGPU:
                         self.config.device,
                     )
                 self.save_checkpoint(val_loss, step, is_best=False)
+
+    def _log_expert_loads(self, step):
+        """Write per-layer expert token counts to output/experts/RUN_NAME_expert_load.json."""
+        unwrap_model = (
+            self.model._orig_mod if hasattr(self.model, "_orig_mod") else self.model
+        )
+        if not hasattr(unwrap_model, "get_expert_loads"):
+            return
+        loads = unwrap_model.get_expert_loads()
+        if not loads:
+            return
+        log_path = f"output/experts/{self.config.run_name}_expert_load.json"
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a") as f:
+            f.write(json.dumps({"step": step, "layers": loads}) + "\n")
 
     def save_checkpoint(self, val_loss, step, is_best=False):
         """Saves a standard PyTorch dictionary checkpoint"""
