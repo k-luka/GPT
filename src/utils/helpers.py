@@ -9,70 +9,52 @@ def print_trainable_parameters(cfg, model):
     """
     Estimates parameters based on configuration.
     """
-    # 1. Architecture Constants
     n_layers = cfg.model.n_layers
     n_embd = cfg.model.n_embd
     vocab_size = cfg.model.vocab_size
     n_heads = cfg.model.n_heads
+    model_type = cfg.model.get("model_type", "gpt")
 
-    # MLA specifics
-    k_size = cfg.model.kv_latent_size
-    q_size = cfg.model.q_latent_size
-    head_size = cfg.model.head_size
-    rope_size = cfg.model.rope_head_size
-    lat_head_size = head_size - rope_size
-
-    # 2. Embedding + Head
+    # Embedding (tied with lm_head, counted once) + final LN
     params_emb = vocab_size * n_embd
-    params_ln_f = n_embd  # Final Layer Norm
+    params_ln_f = n_embd
 
-    # 3. Parameters per Block
-    # --- MLA Attention ---
-    mla_down_q = n_embd * q_size
-    mla_down_kv = n_embd * (k_size + rope_size)
-    mla_norms = q_size + k_size
-    mla_up_q = q_size * n_heads * (lat_head_size + rope_size)
-    mla_up_kv = k_size * n_heads * (lat_head_size + head_size)
-    mla_proj = n_heads * head_size * n_embd
+    # Standard QKV attention used by all model types:
+    #   fused QKV (n_embd -> 3*n_embd) + output proj + q_norm + k_norm
+    H = n_embd // n_heads
+    params_attn = 4 * n_embd * n_embd + 2 * H
 
-    params_mla = mla_down_q + mla_down_kv + mla_norms + mla_up_q + mla_up_kv + mla_proj
-
-    # --- MoE (Shared + Routed) ---
-    s_hidden_req = cfg.model.get("n_shared_experts", 0) * cfg.model.get(
-        "expert_hidden_size", 0
-    )
-    s_hidden = (s_hidden_req + 255) // 256 * 256
-    # Gate + Up (swiglu usually 2 matrices) + Down. No bias.
-    params_shared = (n_embd * s_hidden) + (n_embd * s_hidden) + (s_hidden * n_embd)
-
-    # Routed Experts
-    n_routed = cfg.model.get("n_routed_experts", 0)
-    topk = cfg.model.get("topk_experts", 0)
-    expert_hidden = cfg.model.get("expert_hidden_size", 0)
-
-    # SwiGLU: (n_embd -> 2*h) + (h -> n_embd) -> 3 * n_embd * h
-    params_per_expert = 3 * n_embd * expert_hidden
-
-    # MoE Gate
-    params_gate = n_embd * n_routed
-
-    params_moe_total = params_shared + params_gate + (n_routed * params_per_expert)
-    params_moe_active = params_shared + params_gate + (topk * params_per_expert)
-
-    # Block Layer Norms
+    # Block layer norms (ln1 + ln2)
     params_block_ln = 2 * n_embd
 
-    # --- Layer Totals ---
-    params_layer_total = params_mla + params_moe_total + params_block_ln
-    params_layer_active = params_mla + params_moe_active + params_block_ln
+    if model_type == "gpt_moe":
+        n_routed = cfg.model.get("n_routed_experts", 0)
+        topk = cfg.model.get("topk_experts", 0)
+        expert_hidden = cfg.model.get("expert_hidden_size", 0)
 
-    # 4. Final Sums
-    total_params = params_emb + (n_layers * params_layer_total) + params_ln_f
-    active_params = params_emb + (n_layers * params_layer_active) + params_ln_f
+        s_hidden_req = cfg.model.get("n_shared_experts", 0) * expert_hidden
+        s_hidden = (s_hidden_req + 255) // 256 * 256
+        params_shared = 3 * n_embd * s_hidden
+        params_gate = n_embd * n_routed
+        params_per_expert = 3 * n_embd * expert_hidden
 
-    params_per_shard = 0
-    for i, param in enumerate(model.parameters()):
-        params_per_shard += param.numel()
+        params_mlp_total = params_shared + params_gate + n_routed * params_per_expert
+        params_mlp_active = params_shared + params_gate + topk * params_per_expert
+    else:
+        n_routed = 0
+        topk = 0
+        hidden_dim = int(8 * n_embd // 3)
+        hidden_dim = (hidden_dim + 255) // 256 * 256
+        params_mlp_total = 3 * n_embd * hidden_dim
+        params_mlp_active = params_mlp_total
+
+    params_layer_total = params_attn + params_mlp_total + params_block_ln
+    params_layer_active = params_attn + params_mlp_active + params_block_ln
+
+    total_params = params_emb + n_layers * params_layer_total + params_ln_f
+    active_params = params_emb + n_layers * params_layer_active + params_ln_f
+
+    params_per_shard = sum(p.numel() for p in model.parameters())
 
     print("| --------------------------------------------------------------------")
     print(f"| Config: {cfg.experiment.run_name}")
@@ -98,39 +80,26 @@ def estimate_flops(cfg):
     n_layers = cfg.model.n_layers
     n_embd = cfg.model.n_embd
     n_heads = cfg.model.n_heads
+    model_type = cfg.model.get("model_type", "gpt")
 
-    k_size = cfg.model.kv_latent_size
-    q_size = cfg.model.q_latent_size
-    head_size = cfg.model.head_size
-    rope_size = cfg.model.rope_head_size
-    lat_head_size = head_size - rope_size
+    # Standard QKV attention (all model types)
+    params_attn = 4 * n_embd * n_embd
 
-    # MLA Params per layer
-    mla_down_q = n_embd * q_size
-    mla_down_kv = n_embd * (k_size + rope_size)
-    mla_norms = q_size + k_size
-    mla_up_q = q_size * n_heads * (lat_head_size + rope_size)
-    mla_up_kv = k_size * n_heads * (lat_head_size + head_size)
-    mla_proj = n_heads * head_size * n_embd
-    params_mla = mla_down_q + mla_down_kv + mla_norms + mla_up_q + mla_up_kv + mla_proj
+    if model_type == "gpt_moe":
+        s_hidden_req = cfg.model.get("n_shared_experts", 0) * cfg.model.get("expert_hidden_size", 0)
+        s_hidden = (s_hidden_req + 255) // 256 * 256
+        params_shared = 3 * n_embd * s_hidden
+        params_gate = n_embd * cfg.model.get("n_routed_experts", 0)
+        params_per_expert = 3 * n_embd * cfg.model.get("expert_hidden_size", 0)
+        topk = cfg.model.get("topk_experts", 0)
+        params_mlp_active = params_shared + params_gate + topk * params_per_expert
+    else:
+        hidden_dim = int(8 * n_embd // 3)
+        hidden_dim = (hidden_dim + 255) // 256 * 256
+        params_mlp_active = 3 * n_embd * hidden_dim
 
-    # MoE Active Params per layer
-    s_hidden_req = cfg.model.get("n_shared_experts", 0) * cfg.model.get(
-        "expert_hidden_size", 0
-    )
-    s_hidden = (s_hidden_req + 255) // 256 * 256
-    params_shared = (n_embd * s_hidden) * 3
-
-    topk = cfg.model.get("topk_experts", 0)
-    expert_hidden = cfg.model.get("expert_hidden_size", 0)
-    params_per_expert = 3 * n_embd * expert_hidden
-
-    params_gate = n_embd * cfg.model.get("n_routed_experts", 0)
-
-    params_moe_active = params_shared + params_gate + (topk * params_per_expert)
     params_block_ln = 2 * n_embd
-
-    active_params_per_layer = params_mla + params_moe_active + params_block_ln
+    active_params_per_layer = params_attn + params_mlp_active + params_block_ln
     active_body_params = n_layers * active_params_per_layer
 
     l, t = n_layers, cfg.model.block_size

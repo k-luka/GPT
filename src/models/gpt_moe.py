@@ -162,32 +162,39 @@ class MoE(nn.Module):
     def forward(self, x):
         B, T, C = x.shape
         x_flat = x.view(-1, C)  # (N, C)  N = B*T
+        N = x_flat.shape[0]
 
         shared = self.shared_expert(x)  # (B, T, C)
 
         topk_idx, weights = self.gate(x_flat)  # (N, topk) each
 
-        # Route tokens to each expert and accumulate weighted outputs
+        # Flatten all (token, expert) assignments
+        expert_ids = topk_idx.reshape(-1)  # (N*topk,)
+        token_ids = torch.arange(N, device=x.device).unsqueeze(1).expand(N, self.topk).reshape(-1)
+        flat_weights = weights.reshape(-1)  # (N*topk,)
+
+        # Sort by expert — one GPU op so each expert's tokens are contiguous
+        order = torch.argsort(expert_ids, stable=True)
+        expert_ids_s = expert_ids[order]
+        token_ids_s = token_ids[order]
+        flat_weights_s = flat_weights[order]
+
+        # Single CPU sync to get per-expert counts (drives the Python loop)
+        token_counts = expert_ids_s.bincount(minlength=self.n_routed_experts)
+        expert_counts = token_counts.tolist()
+
         output = torch.zeros_like(x_flat)
-        for i, expert in enumerate(self.experts):
-            # Which tokens selected expert i in any top-k slot?
-            # topk gives unique indices per token, so at most one match per token
-            expert_mask = topk_idx == i  # (N, topk)
-            token_mask = expert_mask.any(dim=-1)  # (N,)
-            if not token_mask.any():
-                continue
-            expert_out = expert(x_flat[token_mask])  # (M, C)
-            # Weight for expert i per selected token: sum over topk dim (only one True per row)
-            expert_weight = (weights[token_mask] * expert_mask[token_mask].float()).sum(
-                dim=-1, keepdim=True
-            )  # (M, 1)
-            output[token_mask] = output[token_mask] + expert_out * expert_weight
+        offset = 0
+        for i, (expert, count) in enumerate(zip(self.experts, expert_counts)):
+            if count > 0:
+                tok = token_ids_s[offset : offset + count]
+                w = flat_weights_s[offset : offset + count].unsqueeze(1)
+                out = (expert(x_flat[tok]) * w).to(output.dtype)
+                output.scatter_add_(0, tok.unsqueeze(1).expand_as(out), out)
+            offset += count
 
         if self.training:
-            token_counts = torch.bincount(
-                topk_idx.flatten(), minlength=self.n_routed_experts
-            )
-            self.last_global_counts = token_counts.detach().cpu().tolist()
+            self.last_global_counts = expert_counts  # already a list, no extra sync
             self.update_bias(token_counts)
 
         return shared + output.view(B, T, C)
@@ -333,7 +340,7 @@ class GPT(nn.Module):
         return loads if loads else None
 
     def configure_optimizers(
-        self, weight_decay, learning_rate, device, use_muon=True, muon_wd=None
+        self, weight_decay, learning_rate, device, use_muon=True, muon_wd=None, muon_backend="custom"
     ):
         if muon_wd is None:
             muon_wd = weight_decay
