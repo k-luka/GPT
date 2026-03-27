@@ -25,7 +25,7 @@ model:
   # Standard MLP would use: int(8 * 1024 // 3) rounded to 256 = 2816
   # ~72% of standard MLP compute — tuned for fine-grained expert dynamics
   n_shared_experts: 2
-  n_routed_experts: 12
+  n_routed_experts: 18
   topk_experts: 6
   expert_hidden_size: 256
 
@@ -49,6 +49,7 @@ training:
   max_lr: 2.0e-4
   min_lr: 2.0e-5
   use_muon: true
-  muon_lr_scale: 100.0
-  muon_wd: 0.0
+  muon_backend: "pytorch_rms"
+  muon_lr_scale: 1.0
+  muon_wd: 0.1
   weight_decay: 0.1

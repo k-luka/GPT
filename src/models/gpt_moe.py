@@ -189,7 +189,7 @@ class MoE(nn.Module):
             )
 
         # Populated during training for external expert-load logging
-        self.last_global_counts: list[int] | None = None
+        self.last_global_counts: torch.Tensor | None = None
 
     def update_bias(self, token_counts, update_rate=0.001):
         """DeepSeek auxiliary-loss-free load balancing via bias correction."""
@@ -202,6 +202,7 @@ class MoE(nn.Module):
             correction = torch.sign(target_load - actual_load)
             self.gate.bias.add_(update_rate * correction)  # pyrefly: ignore
 
+    @torch.compiler.disable
     def _route_tokens(self, x_flat, topk_idx, weights, N):
         """
         Shared permutation logic for both TE and fallback paths.
@@ -300,7 +301,7 @@ class MoE(nn.Module):
             output, token_counts = self._forward_sequential(x_flat, topk_idx, weights, N)
 
         if self.training:
-            self.last_global_counts = token_counts.tolist()
+            self.last_global_counts = token_counts.detach()
             self.update_bias(token_counts)
 
         return shared + output.view(B, T, C)
@@ -452,7 +453,7 @@ class GPT(nn.Module):
         for i, block in enumerate(self.transformer):
             counts = block.moe.last_global_counts
             if counts is not None:
-                loads[str(i)] = counts
+                loads[str(i)] = counts.tolist() if isinstance(counts, torch.Tensor) else counts
         return loads if loads else None
 
     def configure_optimizers(
@@ -495,7 +496,40 @@ class GPT(nn.Module):
         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and "cuda" in str(device)
 
-        if use_muon:
+        if use_muon and muon_backend == "pytorch_rms":
+            print(f"Using PyTorch Muon with match_rms_adamw")
+            print(f"Muon params (2D hidden): {len(muon_params)} tensors")
+            print(f"AdamW decay params (Embed/Head + GroupedLinear): {len(adamw_decay_params)} tensors")
+            print(
+                f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors"
+            )
+            print(f"Weight decay (shared): {weight_decay}")
+            print(f"Using fused AdamW: {use_fused}")
+            print(f"TE GroupedLinear active: {HAS_TE}")
+
+            adam_opt = torch.optim.AdamW(
+                [
+                    {"params": adamw_decay_params, "weight_decay": weight_decay},
+                    {"params": adamw_nodecay_params, "weight_decay": 0.0},
+                ],
+                lr=learning_rate,
+                betas=(0.9, 0.95),
+                eps=1e-8,
+                fused=use_fused,
+            )
+
+            muon_opt = torch.optim.Muon(
+                muon_params,
+                lr=learning_rate,
+                momentum=0.95,
+                nesterov=True,
+                ns_steps=6,
+                weight_decay=weight_decay,
+                adjust_lr_fn="match_rms_adamw",
+            )
+
+            return DualOptimizer(adam_opt, muon_opt)
+        elif use_muon:
             print(f"Muon params (2D hidden): {len(muon_params)} tensors")
             print(f"AdamW decay params (Embed/Head + GroupedLinear): {len(adamw_decay_params)} tensors")
             print(
