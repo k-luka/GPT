@@ -182,5 +182,3 @@ def apply_rotary_emb(x, sin, cos):
     # Standard RoPE rotation formula
     # [-x2, x1] * sin + [x1, x2] * cos
     return torch.cat((-x2, x1), dim=-1) * sin + x * cos
-
-

@@ -54,6 +54,7 @@ def main(cfg: DictConfig):
     model_type = cfg.model.get("model_type", "gpt")
     if model_type == "gpt_split":
         import src.models.gpt_split as gpt_split_module
+
         gpt_split_module.SPLIT_QKV = cfg.model.get("split_qkv", False)
         gpt_split_module.SPLIT_MLP = cfg.model.get("split_mlp", False)
         GPT = gpt_split_module.GPT

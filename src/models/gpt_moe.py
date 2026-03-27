@@ -131,7 +131,9 @@ class MoE(nn.Module):
     Expert utilization is stored in self.last_global_counts for external logging.
     """
 
-    def __init__(self, n_embd, n_shared_experts, n_routed_experts, topk, expert_hidden_size):
+    def __init__(
+        self, n_embd, n_shared_experts, n_routed_experts, topk, expert_hidden_size
+    ):
         super().__init__()
         self.n_embd = n_embd
         self.n_routed_experts = n_routed_experts
@@ -170,8 +172,8 @@ class MoE(nn.Module):
         for i, expert in enumerate(self.experts):
             # Which tokens selected expert i in any top-k slot?
             # topk gives unique indices per token, so at most one match per token
-            expert_mask = (topk_idx == i)         # (N, topk)
-            token_mask = expert_mask.any(dim=-1)   # (N,)
+            expert_mask = topk_idx == i  # (N, topk)
+            token_mask = expert_mask.any(dim=-1)  # (N,)
             if not token_mask.any():
                 continue
             expert_out = expert(x_flat[token_mask])  # (M, C)
@@ -192,12 +194,22 @@ class MoE(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, n_embd, n_heads, n_shared_experts, n_routed_experts, topk, expert_hidden_size):
+    def __init__(
+        self,
+        n_embd,
+        n_heads,
+        n_shared_experts,
+        n_routed_experts,
+        topk,
+        expert_hidden_size,
+    ):
         super().__init__()
         self.ln1 = nn.RMSNorm(n_embd)
         self.sa = Attention(n_embd, n_heads)
         self.ln2 = nn.RMSNorm(n_embd)
-        self.moe = MoE(n_embd, n_shared_experts, n_routed_experts, topk, expert_hidden_size)
+        self.moe = MoE(
+            n_embd, n_shared_experts, n_routed_experts, topk, expert_hidden_size
+        )
 
     def forward(self, x, sin, cos):
         x = x + self.sa(self.ln1(x), sin, cos)
@@ -320,8 +332,9 @@ class GPT(nn.Module):
                 loads[str(i)] = counts
         return loads if loads else None
 
-    def configure_optimizers(self, weight_decay, learning_rate, device,
-                             use_muon=True, muon_wd=None):
+    def configure_optimizers(
+        self, weight_decay, learning_rate, device, use_muon=True, muon_wd=None
+    ):
         if muon_wd is None:
             muon_wd = weight_decay
 
@@ -350,7 +363,9 @@ class GPT(nn.Module):
         if use_muon:
             print(f"Muon params (2D hidden): {len(muon_params)} tensors")
             print(f"AdamW decay params (Embed/Head): {len(adamw_decay_params)} tensors")
-            print(f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors")
+            print(
+                f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors"
+            )
             print(f"Muon weight decay: {muon_wd}")
             print(f"Using fused AdamW: {use_fused}")
 

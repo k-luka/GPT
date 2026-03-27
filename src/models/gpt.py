@@ -182,8 +182,15 @@ class GPT(nn.Module):
 
         return idx
 
-    def configure_optimizers(self, weight_decay, learning_rate, device,
-                             use_muon=True, muon_wd=None, muon_backend="custom"):
+    def configure_optimizers(
+        self,
+        weight_decay,
+        learning_rate,
+        device,
+        use_muon=True,
+        muon_wd=None,
+        muon_backend="custom",
+    ):
         if muon_wd is None:
             muon_wd = weight_decay
 
@@ -213,14 +220,16 @@ class GPT(nn.Module):
             print(f"Using PyTorch Muon with match_rms_adamw")
             print(f"Muon params (2D hidden): {len(muon_params)} tensors")
             print(f"AdamW decay params (Embed/Head): {len(adamw_decay_params)} tensors")
-            print(f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors")
+            print(
+                f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors"
+            )
             print(f"Weight decay (shared): {weight_decay}")
             print(f"Using fused AdamW: {use_fused}")
 
             adam_opt = torch.optim.AdamW(
                 [
                     {"params": adamw_decay_params, "weight_decay": weight_decay},
-                    {"params": adamw_nodecay_params, "weight_decay": 0.0}
+                    {"params": adamw_nodecay_params, "weight_decay": 0.0},
                 ],
                 lr=learning_rate,
                 betas=(0.9, 0.95),
@@ -242,14 +251,16 @@ class GPT(nn.Module):
         elif use_muon:
             print(f"Muon params (2D hidden): {len(muon_params)} tensors")
             print(f"AdamW decay params (Embed/Head): {len(adamw_decay_params)} tensors")
-            print(f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors")
+            print(
+                f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors"
+            )
             print(f"Muon weight decay: {muon_wd}")
             print(f"Using fused AdamW: {use_fused}")
 
             adam_opt = torch.optim.AdamW(
                 [
                     {"params": adamw_decay_params, "weight_decay": weight_decay},
-                    {"params": adamw_nodecay_params, "weight_decay": 0.0}
+                    {"params": adamw_nodecay_params, "weight_decay": 0.0},
                 ],
                 lr=learning_rate,
                 betas=(0.9, 0.95),
@@ -273,7 +284,7 @@ class GPT(nn.Module):
             return torch.optim.AdamW(
                 [
                     {"params": adamw_decay_params, "weight_decay": weight_decay},
-                    {"params": adamw_nodecay_params, "weight_decay": 0.0}
+                    {"params": adamw_nodecay_params, "weight_decay": 0.0},
                 ],
                 lr=learning_rate,
                 betas=(0.9, 0.95),

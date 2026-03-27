@@ -57,8 +57,11 @@ class TrainerSingleGPU:
         )
 
         self.optimizer = self.model.configure_optimizers(
-            self.config.weight_decay, self.config.learning_rate, self.config.device,
-            use_muon=self.config.use_muon, muon_wd=self.config.muon_wd,
+            self.config.weight_decay,
+            self.config.learning_rate,
+            self.config.device,
+            use_muon=self.config.use_muon,
+            muon_wd=self.config.muon_wd,
             muon_backend=self.config.muon_backend,
         )
         self.tokenizer = tokenizer
