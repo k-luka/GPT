@@ -10,7 +10,7 @@ The full writeup is published [on my blog](https://kirilluka.com).
 
 Two main research questions:
 
-1. **Muon vs AdamW** — Does Muon's orthogonalized gradient update outperform AdamW at ~240M scale on FineWeb Edu?
+1. **Muon vs AdamW** — Does Muon's orthogonalized gradient update outperform AdamW at ~280M scale on FineWeb Edu?
 2. **Projection Splitting** — Does splitting fused QKV and SwiGLU projections into separate linear layers improve Muon's effectiveness? (Muon orthogonalizes each weight matrix independently, so fusing projections forces a joint orthogonal constraint across semantically distinct roles.)
 
 A third experiment adds **fine-grained Mixture of Experts** (DeepSeek-style: shared + routed experts) on top of the best optimizer config.
@@ -55,7 +55,6 @@ GPT/
 │   ├── config_basemodel.yaml       # Base model and training config
 │   └── experiments/                # Per-experiment config overrides
 │       ├── exp_baseline_adamw.yaml
-│       ├── exp_300m_base.yaml
 │       ├── exp_muon_fused.yaml
 │       ├── exp_muon_split_qkv.yaml
 │       ├── exp_muon_split_mlp.yaml
@@ -145,7 +144,6 @@ Edit the `EXPERIMENTS` array in `run_experiments.sh` to select which configs to 
 | Config name | Description |
 |---|---|
 | `exp_baseline_adamw` | AdamW only — baseline |
-| `exp_300m_base` | AdamW, same 240M architecture |
 | `exp_muon_fused` | Muon with default fused QKV + SwiGLU |
 | `exp_muon_split_qkv` | Muon with Q, K, V as separate linear layers |
 | `exp_muon_split_mlp` | Muon with split SwiGLU gate/up projections |
