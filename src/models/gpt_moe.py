@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+import transformer_engine.pytorch as te
 from src.utils.helpers import apply_rotary_emb
 from src.utils.optimizers import Muon, DualOptimizer
 import math
@@ -71,20 +72,6 @@ class SharedExpert(nn.Module):
         return self.down_proj(gate * y)
 
 
-class Expert(nn.Module):
-    """Single small routed SwiGLU expert."""
-
-    def __init__(self, n_embd, expert_hidden_size):
-        super().__init__()
-        self.gate_proj = nn.Linear(n_embd, expert_hidden_size * 2, bias=False)
-        self.down_proj = nn.Linear(expert_hidden_size, n_embd, bias=False)
-        self.down_proj.RESIDUAL_SCALE_INIT_FACTOR = True  # pyrefly: ignore
-
-    def forward(self, x):
-        y, gate = torch.chunk(self.gate_proj(x), 2, dim=-1)
-        gate = F.silu(gate)
-        return self.down_proj(gate * y)
-
 
 class Gate(nn.Module):
     """
@@ -108,9 +95,9 @@ class Gate(nn.Module):
         scores = logits.sigmoid()
 
         # Detached bias so load balancing doesn't affect gradient flow
-        topk_idx = torch.topk(scores + self.bias.detach(), self.topk, dim=-1)[
+        topk_idx = torch.topk(scores + self.bias.detach(), self.topk, dim=-1)[ # pyrefly: ignore
             1
-        ]  # pyrefly: ignore
+        ]  
 
         # Gather scores for selected experts and normalize per token
         weights = torch.gather(scores, -1, topk_idx)
@@ -143,8 +130,20 @@ class MoE(nn.Module):
 
         self.gate = Gate(n_embd, n_routed_experts, topk)
         self.shared_expert = SharedExpert(n_embd, n_shared_experts, expert_hidden_size)
-        self.experts = nn.ModuleList(
-            [Expert(n_embd, expert_hidden_size) for _ in range(n_routed_experts)]
+        # Two GroupedLinear layers cover all n_routed_experts simultaneously.
+        # GroupedLinear(num_gemms=E) stores E separate weight matrices and fuses
+        # all E GEMMs into a single kernel call when given m_splits per expert.
+        self.up_proj = te.GroupedLinear(
+            in_features=n_embd,
+            out_features=expert_hidden_size * 2,  # fused gate+up for SwiGLU
+            num_gemms=n_routed_experts,
+            bias=False,
+        )
+        self.down_proj = te.GroupedLinear(
+            in_features=expert_hidden_size,
+            out_features=n_embd,
+            num_gemms=n_routed_experts,
+            bias=False,
         )
 
         # Populated during training for external expert-load logging
@@ -161,34 +160,52 @@ class MoE(nn.Module):
             correction = torch.sign(target_load - actual_load)
             self.gate.bias.add_(update_rate * correction)  # pyrefly: ignore
 
+    @torch.compiler.disable
+    def _route_tokens(self, x_flat, topk_idx, weights, N):
+        expert_ids = topk_idx.reshape(-1)
+        token_ids = (
+            torch.arange(N, device=x_flat.device)
+            .unsqueeze(1)
+            .expand(N, self.topk)
+            .reshape(-1)
+        )
+        flat_weights = weights.reshape(-1)
+        order = torch.argsort(expert_ids, stable=True)
+        token_ids_s = token_ids[order]
+        flat_weights_s = flat_weights[order]
+        token_counts = expert_ids.bincount(minlength=self.n_routed_experts)
+        m_splits = token_counts.tolist()
+        x_permuted = x_flat[token_ids_s]
+        return x_permuted, token_ids_s, flat_weights_s, token_counts, m_splits
+
     def forward(self, x):
         B, T, C = x.shape
         x_flat = x.view(-1, C)  # (N, C)  N = B*T
+        N = x_flat.shape[0]
 
         shared = self.shared_expert(x)  # (B, T, C)
 
         topk_idx, weights = self.gate(x_flat)  # (N, topk) each
 
-        # Route tokens to each expert and accumulate weighted outputs
+        x_permuted, token_ids_s, flat_weights_s, token_counts, m_splits = ( # pyrefly: ignore
+            self._route_tokens(x_flat, topk_idx, weights, N) # pyrefly: ignore
+        )
+
+        # Single fused kernel: all n_routed_experts up-projections in parallel
+        up = self.up_proj(x_permuted, m_splits=m_splits)  # (N*topk, expert_hidden*2)
+        gate_val, up_val = up.chunk(2, dim=-1)
+        h = F.silu(gate_val) * up_val                     # (N*topk, expert_hidden)
+
+        # Single fused kernel: all n_routed_experts down-projections in parallel
+        out_permuted = self.down_proj(h, m_splits=m_splits)  # (N*topk, C)
+
+        out_weighted = (out_permuted * flat_weights_s.unsqueeze(-1)).to(x_flat.dtype)
         output = torch.zeros_like(x_flat)
-        for i, expert in enumerate(self.experts):
-            # Which tokens selected expert i in any top-k slot?
-            # topk gives unique indices per token, so at most one match per token
-            expert_mask = topk_idx == i  # (N, topk)
-            token_mask = expert_mask.any(dim=-1)  # (N,)
-            if not token_mask.any():
-                continue
-            expert_out = expert(x_flat[token_mask])  # (M, C)
-            # Weight for expert i per selected token: sum over topk dim (only one True per row)
-            expert_weight = (weights[token_mask] * expert_mask[token_mask].float()).sum(
-                dim=-1, keepdim=True
-            )  # (M, 1)
-            output[token_mask] = output[token_mask] + expert_out * expert_weight
+        output.scatter_add_(
+            0, token_ids_s.unsqueeze(1).expand_as(out_weighted), out_weighted
+        )
 
         if self.training:
-            token_counts = torch.bincount(
-                topk_idx.flatten(), minlength=self.n_routed_experts
-            )
             self.last_global_counts = token_counts.detach().cpu().tolist()
             self.update_bias(token_counts)
 
@@ -228,8 +245,6 @@ class GPT(nn.Module):
         n_heads,
         head_size,
         rope_head_size,
-        kv_latent_size,
-        q_latent_size,
         n_layers,
         n_shared_experts=2,
         n_routed_experts=64,
@@ -265,6 +280,14 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
         self.wte.weight = self.lm_head.weight
         self.apply(self._init_weights)
+
+        # te.GroupedLinear weights are not nn.Linear, so _init_weights misses them.
+        residual_std = 0.01 / math.sqrt(2 * n_layers)
+        for block in self.transformer:
+            for p in block.moe.up_proj.parameters(): # pyrefly: ignore
+                nn.init.normal_(p, mean=0.0, std=0.01)
+            for p in block.moe.down_proj.parameters(): # pyrefly: ignore
+                nn.init.normal_(p, mean=0.0, std=residual_std)
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -335,12 +358,20 @@ class GPT(nn.Module):
         return loads if loads else None
 
     def configure_optimizers(
-        self, weight_decay, learning_rate, device, use_muon=True, muon_wd=None
+        self, weight_decay, learning_rate, device, use_muon=True, muon_wd=None, muon_backend="custom"
     ):
         if muon_wd is None:
             muon_wd = weight_decay
 
         param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
+
+        # te.GroupedLinear weights must go to AdamW regardless of dim —
+        # Muon's orthogonalization is not designed for concatenated multi-expert weights.
+        te_grouped_param_ids: set[int] = set()
+        for module in self.modules():
+            if isinstance(module, te.GroupedLinear):
+                for p in module.parameters():
+                    te_grouped_param_ids.add(id(p))
 
         adamw_decay_params = []
         adamw_nodecay_params = []
@@ -352,7 +383,9 @@ class GPT(nn.Module):
                 continue
             seen.add(p)
 
-            if use_muon and p.dim() >= 2 and "wte" not in pn and "lm_head" not in pn:
+            if id(p) in te_grouped_param_ids:
+                adamw_decay_params.append(p)
+            elif use_muon and p.dim() >= 2 and "wte" not in pn and "lm_head" not in pn:
                 muon_params.append(p)
             elif p.dim() >= 2:
                 adamw_decay_params.append(p)
@@ -362,9 +395,30 @@ class GPT(nn.Module):
         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and "cuda" in str(device)
 
-        if use_muon:
+        if use_muon and muon_backend == "pytorch_rms":
+            adam_opt = torch.optim.AdamW(
+                [
+                    {"params": adamw_decay_params, "weight_decay": weight_decay},
+                    {"params": adamw_nodecay_params, "weight_decay": 0.0},
+                ],
+                lr=learning_rate,
+                betas=(0.9, 0.95),
+                eps=1e-8,
+                fused=use_fused,
+            )
+            muon_opt = torch.optim.Muon(
+                muon_params,
+                lr=learning_rate,
+                momentum=0.95,
+                nesterov=True,
+                ns_steps=6,
+                weight_decay=weight_decay,
+                adjust_lr_fn="match_rms_adamw",
+            )
+            return DualOptimizer(adam_opt, muon_opt)
+        elif use_muon:
             print(f"Muon params (2D hidden): {len(muon_params)} tensors")
-            print(f"AdamW decay params (Embed/Head): {len(adamw_decay_params)} tensors")
+            print(f"AdamW decay params (Embed/Head + GroupedLinear): {len(adamw_decay_params)} tensors")
             print(
                 f"AdamW no-decay params (1D norms): {len(adamw_nodecay_params)} tensors"
             )
@@ -389,7 +443,7 @@ class GPT(nn.Module):
             )
             return DualOptimizer(adam_opt, muon_opt)
         else:
-            print(f"Decayed params (2D): {len(adamw_decay_params)} tensors")
+            print(f"Decayed params (2D + GroupedLinear): {len(adamw_decay_params)} tensors")
             print(f"Non-decayed params (1D): {len(adamw_nodecay_params)} tensors")
             print(f"Using fused AdamW: {use_fused}")
 

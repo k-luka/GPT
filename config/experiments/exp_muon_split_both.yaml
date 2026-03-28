@@ -17,8 +17,6 @@ model:
   n_heads: 8
   head_size: 128
   rope_head_size: 64
-  kv_latent_size: 512
-  q_latent_size: 4096
 
 data:
   train_data_root: "data/edu_fineweb350B/"

@@ -118,8 +118,6 @@ class GPT(nn.Module):
         n_heads,
         head_size,
         rope_head_size,
-        kv_latent_size,
-        q_latent_size,
         n_layers,
     ):
         super().__init__()

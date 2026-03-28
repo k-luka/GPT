@@ -4,7 +4,7 @@ hydra:
 
 experiment:
   project: "GPT_Nano"
-  run_name: "exp8_finegrained_moe"
+  run_name: "exp_moe"
 
 model:
   model_type: "gpt_moe"
@@ -16,8 +16,6 @@ model:
   n_heads: 8
   head_size: 128
   rope_head_size: 64
-  kv_latent_size: 512
-  q_latent_size: 4096
 
   # Fine-grained MoE settings
   # Active compute per token: (n_shared_experts + topk_experts) * expert_hidden_size

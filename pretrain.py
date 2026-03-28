@@ -79,8 +79,6 @@ def main(cfg: DictConfig):
         n_heads=cfg.model.n_heads,
         head_size=cfg.model.head_size,
         rope_head_size=cfg.model.rope_head_size,
-        kv_latent_size=cfg.model.kv_latent_size,
-        q_latent_size=cfg.model.q_latent_size,
         n_layers=cfg.model.n_layers,
         **moe_kwargs,
     )
