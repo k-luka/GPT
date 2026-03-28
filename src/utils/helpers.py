@@ -86,7 +86,9 @@ def estimate_flops(cfg):
     params_attn = 4 * n_embd * n_embd
 
     if model_type == "gpt_moe":
-        s_hidden_req = cfg.model.get("n_shared_experts", 0) * cfg.model.get("expert_hidden_size", 0)
+        s_hidden_req = cfg.model.get("n_shared_experts", 0) * cfg.model.get(
+            "expert_hidden_size", 0
+        )
         s_hidden = (s_hidden_req + 255) // 256 * 256
         params_shared = 3 * n_embd * s_hidden
         params_gate = n_embd * cfg.model.get("n_routed_experts", 0)
