@@ -1,3 +1,4 @@
+# @package _global_
 hydra:
   run:
     dir: output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
@@ -24,8 +25,8 @@ model:
   # ~72% of standard MLP compute — tuned for fine-grained expert dynamics
   n_shared_experts: 2
   n_routed_experts: 18
-  topk_experts: 6
-  expert_hidden_size: 256
+  topk_experts: 12
+  expert_hidden_size: 128
 
 data:
   train_data_root: "data/edu_fineweb350B/"
@@ -35,7 +36,7 @@ training:
   batch_size: 32
   grad_accum_steps: 4
   logging_steps: 1
-  checkpoint_interval: 4000
+  checkpoint_interval: 4000000
   generation_interval: 2000
   eval_interval: 250
   eval_steps: 40

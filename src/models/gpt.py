@@ -102,13 +102,7 @@ class GPT(nn.Module):
         self.register_buffer("sin", sin)
         self.register_buffer("cos", cos)
         self.transformer = nn.ModuleList(
-            [
-                Block(
-                    n_embd,
-                    n_heads,
-                )
-                for _ in range(n_layers)
-            ]
+            [Block(n_embd, n_heads) for _ in range(n_layers)]
         )
         self.ln = nn.RMSNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
@@ -267,10 +261,7 @@ class GPT(nn.Module):
             )
 
             muon_opt = Muon(
-                [{"params": muon_params}],
-                lr=0.01,
-                momentum=0.95,
-                weight_decay=muon_wd,
+                [{"params": muon_params}], lr=0.01, momentum=0.95, weight_decay=muon_wd
             )
 
             return DualOptimizer(adam_opt, muon_opt)

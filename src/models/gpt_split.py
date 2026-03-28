@@ -288,10 +288,7 @@ class GPT(nn.Module):
             )
 
             muon_opt = Muon(
-                [{"params": muon_params}],
-                lr=0.01,
-                momentum=0.95,
-                weight_decay=muon_wd,
+                [{"params": muon_params}], lr=0.01, momentum=0.95, weight_decay=muon_wd
             )
 
             return DualOptimizer(adam_opt, muon_opt)

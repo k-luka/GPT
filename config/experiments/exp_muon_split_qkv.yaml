@@ -1,3 +1,4 @@
+# @package _global_
 hydra:
   run:
     dir: output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}

@@ -13,3 +13,8 @@ __pycache__/
 # Misc
 *.log
 pyrefly.toml
+.DS_Store
+.env
+*.egg-info/
+.ipynb_checkpoints/
+.hydra/

@@ -8,15 +8,7 @@ def load_tokens(filename):
 
 
 class DataLoader:
-    def __init__(
-        self,
-        data_root,
-        batch_size,
-        block_size,
-        split,
-        rank=0,
-        world_size=1,
-    ):
+    def __init__(self, data_root, batch_size, block_size, split, rank=0, world_size=1):
         self.B = batch_size
         self.T = block_size
         self.rank = rank

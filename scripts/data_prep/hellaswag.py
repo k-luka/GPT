@@ -45,11 +45,7 @@ def download_file(url: str, fname: str, chunk_size=1024):
     resp = requests.get(url, stream=True)
     total = int(resp.headers.get("content-length", 0))
     with open(fname, "wb") as file, tqdm(
-        desc=fname,
-        total=total,
-        unit="iB",
-        unit_scale=True,
-        unit_divisor=1024,
+        desc=fname, total=total, unit="iB", unit_scale=True, unit_divisor=1024
     ) as bar:
         for data in resp.iter_content(chunk_size=chunk_size):
             size = file.write(data)
@@ -88,11 +84,7 @@ def render_example(example):
     endings = example["endings"]
 
     # data needed to reproduce this eval on the C size
-    data = {
-        "label": label,
-        "ctx_tokens": None,
-        "ending_tokens": [],
-    }
+    data = {"label": label, "ctx_tokens": None, "ending_tokens": []}
 
     # gather up all the tokens
     ctx_tokens = [eot] + enc.encode(ctx)
