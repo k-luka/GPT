@@ -1,4 +1,4 @@
-# GPT Pretraining Research
+# LLM Pretraining Research
 
 Research codebase for pretraining decoder-only GPT models (~240M parameters) on a single NVIDIA B200 GPU. Focuses on the [Muon optimizer](https://github.com/KellerJordan/Muon), projection splitting, and Mixture of Experts architectures.
 
