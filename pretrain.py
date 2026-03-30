@@ -72,6 +72,13 @@ def main(cfg: DictConfig):
             "expert_hidden_size": cfg.model.get("expert_hidden_size", 256),
         }
 
+    gpt_kwargs = {}
+    if model_type == "gpt":
+        gpt_kwargs = {
+            "n_kv_heads": cfg.model.get("n_kv_heads", None),
+            "use_qk_norm": cfg.model.get("use_qk_norm", True),
+        }
+
     model = GPT(
         n_embd=cfg.model.n_embd,
         vocab_size=cfg.model.vocab_size,
@@ -81,6 +88,7 @@ def main(cfg: DictConfig):
         rope_head_size=cfg.model.rope_head_size,
         n_layers=cfg.model.n_layers,
         **moe_kwargs,
+        **gpt_kwargs,
     )
 
     # Move to GPU and optionally compile
@@ -112,6 +120,8 @@ def main(cfg: DictConfig):
         eval_batch_size=cfg.training.eval_batch_size,
         eval_block_size=cfg.training.eval_block_size,
         device=str(device_obj),
+        lr_schedule=cfg.training.get("lr_schedule", "cosine"),
+        stable_steps=cfg.training.get("stable_steps", 0),
     )
 
     trainer = TrainerSingleGPU(

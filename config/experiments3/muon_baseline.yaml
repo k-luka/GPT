@@ -1,0 +1,43 @@
+# @package _global_
+hydra:
+  run:
+    dir: output/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+experiment:
+  project: "GPT_Nano_Extra"
+  run_name: "Muon-Baseline"
+
+model:
+  model_type: "gpt"
+  vocab_size: 50304
+  block_size: 2048
+  n_embd: 512
+  n_layers: 18
+  n_heads: 8
+  head_size: 64
+  rope_head_size: 64
+
+data:
+  train_data_root: "data/edu_fineweb350B/"
+  val_data_root: "data/edu_fineweb350B/"
+
+training:
+  batch_size: 64
+  grad_accum_steps: 2
+  logging_steps: 10
+  checkpoint_interval: 4000
+  generation_interval: 2000
+  eval_interval: 250
+  eval_steps: 40
+  eval_batch_size: 16
+  eval_block_size: 2048
+
+  max_steps: 6600
+  warmup_steps: 200
+  max_lr: 2.0e-4
+  min_lr: 2.0e-5
+  use_muon: true
+  muon_backend: "pytorch_rms"
+  muon_lr_scale: 1.0
+  muon_wd: 0.1
+  weight_decay: 0.1

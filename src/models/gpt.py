@@ -12,31 +12,45 @@ Implements a base model to compare future tests against
 
 
 class Attention(nn.Module):
-    def __init__(self, n_embd, n_heads):
+    def __init__(self, n_embd, n_heads, n_kv_heads=None, use_qk_norm=True):
         super().__init__()
         assert (
             n_embd % n_heads == 0
         ), f"Embedding dim ({n_embd}) must be divisible by number of heads ({n_heads})."
         self.n_embd = n_embd
         self.n_heads = n_heads
+        self.n_kv_heads = n_kv_heads if n_kv_heads is not None else n_heads
+        assert (
+            n_heads % self.n_kv_heads == 0
+        ), f"n_heads ({n_heads}) must be divisible by n_kv_heads ({self.n_kv_heads})."
         self.H = n_embd // n_heads  # head size
-        self.attn = nn.Linear(n_embd, 3 * n_embd, bias=False)
+        self.use_qk_norm = use_qk_norm
+        # Q gets n_heads * H, K and V each get n_kv_heads * H
+        self.attn = nn.Linear(n_embd, self.n_heads * self.H + 2 * self.n_kv_heads * self.H, bias=False)
         self.proj = nn.Linear(n_embd, n_embd, bias=False)
-        self.q_norm = nn.RMSNorm(self.H)
-        self.k_norm = nn.RMSNorm(self.H)
+        if use_qk_norm:
+            self.q_norm = nn.RMSNorm(self.H)
+            self.k_norm = nn.RMSNorm(self.H)
         self.proj.RESIDUAL_SCALE_INIT_FACTOR = True  # pyrefly: ignore
-        # self.register_buffer("tril", torch.tril(torch.ones(block_size,block_size)).view(1,1,block_size,block_size))
 
     def forward(self, x, sin, cos):
         B, T, C = x.shape
-        q, k, v = self.attn(x).split(self.n_embd, dim=-1)  # q,k,v each is (B,T,C)
-        q = q.view(B, T, self.n_heads, self.H).transpose(1, 2)  # (B,n_heads,T,H)
-        k = k.view(B, T, self.n_heads, self.H).transpose(1, 2)
-        v = v.view(B, T, self.n_heads, self.H).transpose(1, 2)
+        q, k, v = self.attn(x).split(
+            [self.n_heads * self.H, self.n_kv_heads * self.H, self.n_kv_heads * self.H], dim=-1
+        )
+        q = q.view(B, T, self.n_heads, self.H).transpose(1, 2)      # (B, n_heads, T, H)
+        k = k.view(B, T, self.n_kv_heads, self.H).transpose(1, 2)   # (B, n_kv_heads, T, H)
+        v = v.view(B, T, self.n_kv_heads, self.H).transpose(1, 2)
         # Apply RoPE
         q = apply_rotary_emb(q, sin, cos)
         k = apply_rotary_emb(k, sin, cos)
-        q, k = self.q_norm(q), self.k_norm(k)
+        if self.use_qk_norm:
+            q, k = self.q_norm(q), self.k_norm(k)
+        # Expand KV heads to match Q heads (GQA)
+        if self.n_kv_heads != self.n_heads:
+            reps = self.n_heads // self.n_kv_heads
+            k = k.repeat_interleave(reps, dim=1)
+            v = v.repeat_interleave(reps, dim=1)
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         return self.proj(out)
@@ -64,10 +78,10 @@ class MLP(nn.Module):
 
 # Block
 class Block(nn.Module):
-    def __init__(self, n_embd, n_heads):
+    def __init__(self, n_embd, n_heads, n_kv_heads=None, use_qk_norm=True):
         super().__init__()
         self.ln1 = nn.RMSNorm(n_embd)
-        self.sa = Attention(n_embd, n_heads)
+        self.sa = Attention(n_embd, n_heads, n_kv_heads=n_kv_heads, use_qk_norm=use_qk_norm)
         self.ln2 = nn.RMSNorm(n_embd)
         self.mlp = MLP(n_embd)
 
@@ -88,6 +102,8 @@ class GPT(nn.Module):
         head_size,
         rope_head_size,
         n_layers,
+        n_kv_heads=None,
+        use_qk_norm=True,
     ):
         super().__init__()
         self.block_size = block_size
@@ -102,7 +118,7 @@ class GPT(nn.Module):
         self.register_buffer("sin", sin)
         self.register_buffer("cos", cos)
         self.transformer = nn.ModuleList(
-            [Block(n_embd, n_heads) for _ in range(n_layers)]
+            [Block(n_embd, n_heads, n_kv_heads=n_kv_heads, use_qk_norm=use_qk_norm) for _ in range(n_layers)]
         )
         self.ln = nn.RMSNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)

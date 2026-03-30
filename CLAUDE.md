@@ -18,7 +18,8 @@ GPT/
 ├── pretrain.py                    # Main entry point — Hydra-based training launcher
 ├── config/
 │   ├── config_basemodel.yaml      # Base model/training configuration
-│   └── experiments/               # Per-experiment config overrides (exp_0 through exp_7)
+│   ├── experiments/               # Per-experiment config overrides (exp_0 through exp_7)
+│   └── experiments2/              # Small-scale MoE study configs (87M dense vs 163M/73M-active MoE)
 ├── scripts/
 │   ├── baseline_model.sh          # SLURM job script for a single run
 │   ├── run_experiments.sh         # Sequentially submits all 8 experiments
@@ -123,6 +124,16 @@ Uses [Hydra](https://hydra.cc/) with YAML configs. Base config is `config/config
 | `exp_5_split_qkv.yaml` | Split Q/K/V projections |
 | `exp_6_split_all.yaml` | Split QKV + split MLP |
 | `exp_7_best.yaml` | Best combo: split model + `split_mlp: true` + `muon_lr_scale: 100` |
+
+### Experiment Configs (in `config/experiments2/`)
+
+Small-scale MoE study on an 87M parameter baseline to evaluate whether MoE is beneficial at that scale. Dense baselines are ~87M params; the MoE model is 163M total with ~73M active parameters.
+
+| File | Variation |
+|---|---|
+| `adamw.yaml` | 87M dense baseline with AdamW |
+| `muon.yaml` | 87M dense baseline with Muon |
+| `moe.yaml` | 163M total / 73M active MoE with Muon (32 routed experts, top-6, 2 shared, `expert_hidden_size: 128`) |
 
 ---
 

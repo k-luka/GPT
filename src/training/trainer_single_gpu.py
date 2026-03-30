@@ -32,6 +32,8 @@ class TrainerConfig:
     eval_batch_size: int = 64
     eval_block_size: int = 1024
     device: str = "cuda"
+    lr_schedule: str = "cosine"
+    stable_steps: int = 0
 
 
 class TrainerSingleGPU:
@@ -70,6 +72,15 @@ class TrainerSingleGPU:
     def get_lr(self, it):
         if it < self.config.warmup_steps:
             return self.config.max_lr * it / self.config.warmup_steps
+        if self.config.lr_schedule == "wsd":
+            stable_end = self.config.warmup_steps + self.config.stable_steps
+            if it <= stable_end:
+                return self.config.max_lr
+            decay_ratio = min(
+                (it - stable_end) / max(self.config.max_steps - stable_end, 1), 1.0
+            )
+            return self.config.max_lr - decay_ratio * (self.config.max_lr - self.config.min_lr)
+        # cosine (default)
         if it > self.config.max_steps:
             return self.config.min_lr
         decay_ratio = (it - self.config.warmup_steps) / (
